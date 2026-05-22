@@ -137,6 +137,10 @@ def scrape_remedy_page(url: str, letter: str, abbreviation: str) -> dict:
     # ── Step 3: pull out relationships as its own field ───────────────
     relationships = sections.pop("Relationships", None) or sections.pop("Relationship", None)
 
+    # extract potencies from dose section
+    dose_text = sections.get("Dose", "")
+    potencies = extract_potencies(dose_text)
+
     return {
         "abbreviation": abbreviation,
         "full_name": full_name,
@@ -145,8 +149,52 @@ def scrape_remedy_page(url: str, letter: str, abbreviation: str) -> dict:
         "letter": letter,
         "general": general,
         "sections": sections,
-        "relationships": relationships
+        "relationships": relationships,
+        "potencies": potencies
     }
+
+def extract_potencies(dose_text: str) -> list[str]:
+    """
+    Extract potency values from the Dose section text.
+    e.g. "First to third potency" -> ["1x", "3x"]
+    """
+    if not dose_text:
+        return []
+
+    potencies = []
+
+    # words like "first", "third" map to potency numbers
+    ordinals = {
+        "first": "1", "second": "2", "third": "3",
+        "fourth": "4", "fifth": "5", "sixth": "6",
+        "twelfth": "12", "thirtieth": "30", "two-hundredth": "200"
+    }
+
+    text = dose_text.lower()
+
+    # check if any ordinal word appears in the dose text
+    # e.g. "First to third" -> ["1x", "3x"]
+    for word, number in ordinals.items():
+        if word in text:
+            potencies.append(f"{number}x")
+
+    # match potency numbers written directly e.g. "3x", "6c", "30c"
+    direct = re.findall(r"\b(\d+[xXcC])\b", dose_text)
+    potencies.extend([p.lower() for p in direct])
+
+    # mother tincture is written as Q in homeopathy
+    if "tincture" in text or "mother" in text:
+        potencies.append("Q")
+
+    # remove duplicates but keep the original order
+    seen = set()
+    result = []
+    for p in potencies:
+        if p not in seen:
+            seen.add(p)
+            result.append(p)
+
+    return result
 
 
 def save_output(remedies: list[dict], path: str = "boericke_remedies.json") -> None:

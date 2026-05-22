@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Boericke Materia Medica Scraper
 
 Scrapes [Boericke's Homoeopathic Materia Medica](http://homeoint.org/books/boericmm/index.htm) and outputs a structured JSON dataset of all remedies A–Z.
@@ -76,3 +77,6 @@ If the script is interrupted, just run it again. It automatically skips already 
 | `parse_remedy_links(html, letter)` | Extracts all remedy links from the index page |
 | `scrape_remedy_page(url, letter, abbreviation)` | Scrapes a single remedy page |
 | `save_output(remedies)` | Saves the remedy list to JSON |
+=======
+# boericke-scraper
+>>>>>>> d17c9ef51054d824f98a4a6f544fbcc22be63a3c
