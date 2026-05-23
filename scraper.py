@@ -3,6 +3,7 @@ import time
 import random
 import re
 import json
+import argparse
 from pathlib import Path
 from bs4 import BeautifulSoup, NavigableString, Tag
 
@@ -140,6 +141,8 @@ def scrape_remedy_page(url: str, letter: str, abbreviation: str) -> dict:
     # extract potencies from dose section
     dose_text = sections.get("Dose", "")
     potencies = extract_potencies(dose_text)
+    # extract top 10 keywords from all remedy text
+    keywords = extract_keywords(general, sections)
 
     return {
         "abbreviation": abbreviation,
@@ -150,9 +153,13 @@ def scrape_remedy_page(url: str, letter: str, abbreviation: str) -> dict:
         "general": general,
         "sections": sections,
         "relationships": relationships,
-        "potencies": potencies
+        "potencies": potencies,
+        "keywords": keywords
     }
 
+# The `extract_potencies` function is designed to parse the text from the Dose section of a remedy page and extract any potency values mentioned.
+# It looks for both ordinal words (like "first", "third") and direct potency notations (like "3x", "6c"). 
+# It also recognizes mentions of "tincture" or "mother" as indicating a potency of "Q". The function returns a list of unique potency values found in the text.
 def extract_potencies(dose_text: str) -> list[str]:
     """
     Extract potency values from the Dose section text.
@@ -196,7 +203,43 @@ def extract_potencies(dose_text: str) -> list[str]:
 
     return result
 
+# This functions uses Natural language processing to extract the most relevant symptom keywords from the remedy text.
+# compute an array of the top 10 most common words that are not stopwords. This can help identify key symptoms associated with the remedy.
+def extract_keywords(general: str, sections: dict) -> list[str]:
+    """
+    Extract top 10 symptom keywords from the remedy text.
+    Uses nltk stopwords to filter out common english words,
+    then returns top 10 by word frequency.
+    """
+    from nltk.corpus import stopwords
 
+    # combine all remedy text
+    all_text = general + " " + " ".join(sections.values())
+    all_text = all_text.lower()
+
+    # use nltk's built-in english stopwords + our custom medical non-symptoms
+    stop_words = set(stopwords.words("english")) | {
+        "remedy", "potency", "dose", "compare", "symptoms", "cases",
+        "action", "effects", "causes", "indicated", "patient", "feels",
+        "feeling", "feel", "great", "better", "worse", "right", "left"
+    }
+
+    # extract words (letters only, length > 3)
+    words = re.findall(r"\b[a-z]{4,}\b", all_text)
+
+    # count frequency ignoring stopwords
+    word_count = {}
+    for word in words:
+        if word not in stop_words:
+            word_count[word] = word_count.get(word, 0) + 1
+
+    # return top 10 by frequency
+    top10 = sorted(word_count, key=word_count.get, reverse=True)[:10]
+
+    return top10  
+
+
+# The final function saves the scraped remedies to a JSON file. It takes care of encoding and formatting for readability.
 def save_output(remedies: list[dict], path: str = "boericke_remedies.json") -> None:
     """
     Save the list of remedies to a JSON file.
@@ -206,6 +249,35 @@ def save_output(remedies: list[dict], path: str = "boericke_remedies.json") -> N
     print(f"Saved {len(remedies)} remedies to {path}")
 
 
+# `upload_to_mongodb` connects to a local MongoDB instance and inserts the scraped remedies into a collection. It checks for duplicates based on the source URL to avoid inserting the same remedy multiple times.
+def upload_to_mongodb(remedies: list[dict]) -> None:
+    """
+    Upload all remedies to a local MongoDB collection.
+    Connects to localhost:27017 and inserts into jarvis.care > remedies collection.
+    Skips duplicates based on source_url.
+    """
+    from pymongo import MongoClient
+
+    # connect to local MongoDB
+    client = MongoClient("mongodb://localhost:27017/")
+    db = client["boericke-scraper"]
+    collection = db["remedies"]
+
+    # avoid duplicates — only insert new ones
+    existing_urls = set(doc["source_url"] for doc in collection.find({}, {"source_url": 1}))
+    new_remedies = [r for r in remedies if r["source_url"] not in existing_urls]
+
+    if not new_remedies:
+        print("All remedies already in MongoDB — nothing to insert.")
+        return
+
+    collection.insert_many(new_remedies)
+    print(f"Uploaded {len(new_remedies)} remedies to MongoDB collection 'remedies'")
+
+
+# The `main` function orchestrates the entire scraping process. It iterates through each letter of the alphabet, fetches the index page, parses remedy links, and scrapes each remedy page. 
+# It also handles resumability by loading existing scraped data and skipping already scraped URLs. 
+# Finally, it saves the output to a JSON file and Mongodb collection or database.
 def main():
     output_file = "boericke_remedies.json"
     remedies = []
@@ -246,6 +318,17 @@ def main():
 
         save_output(remedies)
 
-
+# The script can be run with an optional --upload flag. If this flag is provided, the script will upload the scraped remedies to a local MongoDB instance after saving them to a JSON file.
 if __name__ == "__main__":
+    # parse command line arguments
+    parser = argparse.ArgumentParser(description="Boericke Materia Medica Scraper")
+    parser.add_argument("--upload", action="store_true", help="Upload scraped data to MongoDB")
+    args = parser.parse_args()
+
     main()
+    # After scraping and saving to JSON, if the --upload flag is set, the script will read the JSON file and upload the remedies to MongoDB using the upload_to_mongodb function.
+    # if --upload flag is passed, push to MongoDB after scraping
+    if args.upload:
+        with open("boericke_remedies.json", "r", encoding="utf-8") as f:
+            remedies = json.load(f)
+        upload_to_mongodb(remedies)
